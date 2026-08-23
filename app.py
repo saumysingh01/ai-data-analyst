@@ -163,7 +163,7 @@ def get_sql_agent() -> SQLAgent:
 
     config = LLMConfig(
         provider="groq",
-        model="llama-3.3-70b-versatile",
+        model="qwen/qwen3.6-27b",
         api_key=groq_key,
         temperature=0.0
     )
