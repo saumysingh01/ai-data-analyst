@@ -1,7 +1,6 @@
 """
 app.py
 Streamlit-based GenAI-Powered Text-to-SQL Business Intelligence Dashboard.
-Theme-aware, sidebar-fixed, callback-optimized.
 """
 
 import os
@@ -95,9 +94,10 @@ def get_sql_agent() -> SQLAgent:
 
     groq_key = groq_key.strip().strip('"').strip("'")
 
+    # SWITCHED TO: openai/gpt-oss-120b (clean text model, no thinking blocks)
     config = LLMConfig(
         provider="groq",
-        model="qwen/qwen3.6-27b",
+        model="openai/gpt-oss-120b",
         api_key=groq_key,
         temperature=0.0
     )
@@ -114,7 +114,6 @@ def render_schema_sidebar(db_manager: DatabaseManager) -> None:
                 for col in columns:
                     pk_badge = " 🔑" if col.get("pk") else ""
                     nullable = "NULL" if col.get("nullable") else "NOT NULL"
-                    # FIXED: use st.markdown (not st.sidebar) inside sidebar expander
                     st.markdown(f"• `{col['name']}` `{col['type']}` *{nullable}*{pk_badge}")
         st.sidebar.markdown("---")
         st.sidebar.info("💡 Ask about users, products, orders, and relationships.")
@@ -128,7 +127,6 @@ def render_query_history() -> None:
         for idx, item in enumerate(reversed(st.session_state.query_history[-5:])):
             q_num = len(st.session_state.query_history) - idx
             with st.sidebar.expander(f"Q{q_num}", expanded=False):
-                # FIXED: use st.markdown (not st.sidebar) inside sidebar expander
                 st.markdown(f"**Q:** {item['question']}")
                 st.markdown(f"```sql\n{item['sql']}\n```")
                 st.markdown(f"**Rows:** {item['rows']}")
@@ -198,7 +196,7 @@ def main() -> None:
 
     st.sidebar.markdown("---")
     st.sidebar.markdown("## ⚙️ Settings")
-    st.sidebar.markdown("**LLM:** Groq `qwen/qwen3.6-27b`")
+    st.sidebar.markdown("**LLM:** Groq `openai/gpt-oss-120b`")
     st.sidebar.markdown("**DB:** SQLite `bi_dashboard.db`")
 
     st.markdown('<div class="main-header">🧠 GenAI-Powered BI Dashboard</div>', unsafe_allow_html=True)
