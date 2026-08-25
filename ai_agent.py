@@ -1,7 +1,7 @@
 """
 ai_agent.py
 LLM integration layer for natural language to SQL translation.
-Uses the Groq API with Llama 3.3 70B for ultra-fast, zero-cost inference.
+Uses the Groq API with Qwen.
 """
 
 import os
@@ -10,7 +10,6 @@ import logging
 from typing import Optional, Dict, Any
 from dataclasses import dataclass
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
@@ -20,9 +19,8 @@ logger = logging.getLogger("ai_agent")
 
 @dataclass
 class LLMConfig:
-    """Configuration for LLM provider."""
     provider: str = "groq"
-    model: str = "llama-3.3-70b-versatile"
+    model: str = "qwen/qwen3.6-27b"
     api_key: Optional[str] = None
     temperature: float = 0.0
     max_tokens: int = 500
@@ -30,156 +28,110 @@ class LLMConfig:
 
 class SQLAgent:
     """
-    GenAI-powered SQL agent that translates natural language questions
-    into executable, safe SQL queries using Groq's Llama 3.3 70B.
+    GenAI-powered SQL agent. Surgically isolates SELECT statements
+    from Qwen's noisy output (reasoning, markdown, XML tags).
     """
 
-    SYSTEM_PROMPT_TEMPLATE = """You are an expert SQL query generator for a Business Intelligence dashboard.
-Your task is to translate natural language questions into clean, executable SQL queries.
+    SYSTEM_PROMPT_TEMPLATE = """You are a SQL generator. Output ONE raw SQL query only.
 
-DATABASE SCHEMA:
+SCHEMA:
 {schema}
 
 RULES:
-1. Output ONLY the raw SQL query. No markdown formatting, no backticks (```), no explanations.
-2. Use standard SQL compatible with {dialect}.
-3. Use table aliases for readability (e.g., u for users, p for products, o for orders).
-4. For aggregations, use clear column aliases.
-5. When filtering dates, use proper date comparisons.
-6. For joins, always specify the join condition explicitly.
-7. If the question is ambiguous, make reasonable assumptions and write the most likely query.
-8. Never output multiple queries. Only one SELECT statement.
-9. Do NOT include any comments in the SQL output.
-10. Ensure all column references are qualified with table names or aliases when joining.
+- Start with SELECT. End with ;
+- No markdown. No backticks. No explanations. No numbering.
+- No reasoning. No aliases list. No self-correction.
+- {dialect} syntax. Use short aliases (u,p,o).
 
-OUTPUT FORMAT:
-Return ONLY the SQL query as plain text. Nothing else."""
+OUTPUT:"""
 
     def __init__(self, config: Optional[LLMConfig] = None):
-        """
-        Initialize the SQL Agent with Groq LLM configuration.
-
-        Args:
-            config: LLMConfig instance. Defaults to Groq with Llama 3.3 70B.
-        """
         self.config = config or LLMConfig()
-        self._client: Optional[Any] = None
+        self._client = None
         self._setup_client()
-
-        logger.info(
-            f"SQLAgent initialized with provider={self.config.provider}, "
-            f"model={self.config.model}"
-        )
+        logger.info(f"SQLAgent: {self.config.provider}/{self.config.model}")
 
     def _setup_client(self) -> None:
-        """Initialize the Groq client with explicit key validation."""
         try:
             from groq import Groq
-
-            # Priority: 1) explicit config, 2) environment variable
             api_key = self.config.api_key or os.environ.get("GROQ_API_KEY")
-
             if not api_key:
-                raise ValueError(
-                    "Groq API key is missing.\n"
-                    "Set it before starting Streamlit:\n"
-                    "  export GROQ_API_KEY='gsk_...'\n"
-                    "Or pass it directly via LLMConfig(api_key='...')."
-                )
-
-            # Defensive strip in case the user accidentally included whitespace/quotes
+                raise ValueError("GROQ_API_KEY missing.")
             api_key = api_key.strip().strip('"').strip("'")
-
-            if not api_key.startswith("gsk_"):
-                logger.warning("Groq API key does not start with 'gsk_'. This may be invalid.")
-
             self._client = Groq(api_key=api_key)
-            logger.info("Groq client initialized successfully")
-
         except ImportError:
-            raise ImportError(
-                "Groq SDK not installed. Run: pip install groq"
-            )
+            raise ImportError("pip install groq")
 
     def _build_system_prompt(self, schema_ddl: str, dialect: str = "SQLite") -> str:
-        """
-        Build the system prompt with schema context.
-
-        Args:
-            schema_ddl: Database schema DDL string.
-            dialect: SQL dialect (SQLite or MySQL).
-
-        Returns:
-            Formatted system prompt string.
-        """
-        return self.SYSTEM_PROMPT_TEMPLATE.format(
-            schema=schema_ddl,
-            dialect=dialect
-        )
+        return self.SYSTEM_PROMPT_TEMPLATE.format(schema=schema_ddl, dialect=dialect)
 
     def _clean_sql_output(self, raw_output: str) -> str:
         """
-        Clean LLM output to extract pure SQL query.
-        Removes markdown code blocks, backticks, and extra text.
-
-        Args:
-            raw_output: Raw string from LLM.
-
-        Returns:
-            Clean SQL query string.
+        Brutally isolates the first SELECT...; statement.
+        Discards everything else: reasoning, markdown, XML, filler.
         """
-        # Remove markdown code blocks
-        cleaned = re.sub(r"```sql\s*", "", raw_output, flags=re.IGNORECASE)
-        cleaned = re.sub(r"```\s*", "", cleaned)
+        if not raw_output:
+            return ""
 
-        # Remove single backticks
-        cleaned = cleaned.replace("`", "")
+        text = raw_output
 
-        # Strip whitespace and newlines
-        cleaned = cleaned.strip()
+        # Strip markdown & special tokens
+        text = re.sub(r"```sql\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"```\s*", "", text)
+        text = text.replace("`", "")
+        text = re.sub(r"<[^>]+>", "", text)
 
-        # Extract only valid SQL lines, skip conversational prefixes
-        lines = cleaned.split("\n")
+        # Find first SELECT
+        select_match = re.search(r'\bSELECT\b', text, re.IGNORECASE)
+        if not select_match:
+            return ""
+
+        remaining = text[select_match.start():]
+
+        # Extract line-by-line until SQL clearly ends
+        lines = remaining.splitlines()
         sql_lines = []
+
         for line in lines:
             stripped = line.strip()
             if not stripped:
-                continue
-            if stripped.lower().startswith(
-                ("here is", "the query", "sql:", "query:", "sure", "okay")
+                break
+
+            # Stop at explanation / reasoning lines
+            if re.match(
+                r'^(?:\d+\.|Note|Explanation|Here|Sure|Okay|This|That|It|The|Query|SQL|Output|Refining|Aliases|Columns|Constraints|Final|Self|If|Because|Since|However|Therefore|Thus|So|Wait|Actually|Let me|First|Second|Third|Next|Then|Finally)\b',
+                stripped,
+                re.IGNORECASE
             ):
-                continue
+                break
+
             sql_lines.append(stripped)
 
-        cleaned = " ".join(sql_lines)
+            # Semicolon = end of SQL
+            if stripped.endswith(';'):
+                break
 
-        # Ensure it ends with semicolon for consistency
-        if cleaned and not cleaned.endswith(";"):
-            cleaned += ";"
+        if not sql_lines:
+            return ""
 
-        logger.debug(f"Cleaned SQL: {cleaned[:100]}...")
-        return cleaned
+        sql = " ".join(sql_lines)
+        sql = re.sub(r'\s+', ' ', sql).strip()
 
-    def generate_sql(
-        self,
-        question: str,
-        schema_ddl: str,
-        dialect: str = "SQLite"
-    ) -> str:
-        """
-        Generate SQL query from natural language question via Groq.
+        # Second-pass: cut inline explanation text that leaked in
+        inline_cut = re.search(
+            r'\s+(?:Note|Explanation|Here|Sure|Okay|Refining|Aliases|Columns|Constraints|Final|Self|If|Because|Since|However|Therefore|Thus|So|Wait|Actually)\b',
+            sql,
+            re.IGNORECASE
+        )
+        if inline_cut:
+            sql = sql[:inline_cut.start()].strip()
 
-        Args:
-            question: Natural language question from user.
-            schema_ddl: Database schema DDL for context.
-            dialect: SQL dialect being used.
+        if not sql.endswith(';'):
+            sql += ';'
 
-        Returns:
-            Clean SQL query string.
+        return sql
 
-        Raises:
-            RuntimeError: If Groq API call fails or returns invalid output.
-        """
+    def generate_sql(self, question: str, schema_ddl: str, dialect: str = "SQLite") -> str:
         system_prompt = self._build_system_prompt(schema_ddl, dialect)
 
         try:
@@ -194,44 +146,30 @@ Return ONLY the SQL query as plain text. Nothing else."""
             )
 
             raw_output = response.choices[0].message.content
-
-            if not raw_output or not raw_output.strip():
-                raise ValueError("Groq returned empty response")
+            if not raw_output:
+                raise ValueError("Empty LLM response")
 
             cleaned_sql = self._clean_sql_output(raw_output)
-            logger.info(f"Generated SQL: {cleaned_sql[:100]}...")
+
+            if not cleaned_sql:
+                logger.error(f"SQL extraction failed. Raw: {raw_output[:300]}")
+                raise ValueError("Could not extract SQL from model output.")
+
             return cleaned_sql
 
         except Exception as e:
-            logger.error(f"Groq query generation failed: {e}")
-            raise RuntimeError(f"Failed to generate SQL from natural language: {e}")
+            logger.error(f"Generation failed: {e}")
+            raise RuntimeError(f"SQL generation failed: {e}")
 
     def validate_sql_syntax(self, sql: str) -> Dict[str, Any]:
-        """
-        Basic validation of generated SQL.
-
-        Args:
-            sql: SQL query string to validate.
-
-        Returns:
-            Dictionary with 'valid' boolean and 'issues' list.
-        """
         issues = []
-        sql_upper = sql.upper()
+        sql_upper = sql.upper().strip()
 
-        # Must start with SELECT
-        if not sql_upper.strip().startswith("SELECT"):
+        if not sql_upper.startswith("SELECT"):
             issues.append("Query does not start with SELECT")
-
-        # Check for balanced parentheses
         if sql.count("(") != sql.count(")"):
             issues.append("Unbalanced parentheses")
-
-        # Check for basic structure
         if "FROM" not in sql_upper:
             issues.append("Missing FROM clause")
 
-        return {
-            "valid": len(issues) == 0,
-            "issues": issues
-        }
+        return {"valid": len(issues) == 0, "issues": issues}
