@@ -1,7 +1,7 @@
 """
 ai_agent.py
 LLM integration layer for natural language to SQL translation.
-Uses the Groq API with Qwen.
+Uses Groq API with Qwen model.
 """
 
 import os
@@ -28,8 +28,8 @@ class LLMConfig:
 
 class SQLAgent:
     """
-    GenAI-powered SQL agent. Surgically isolates SELECT statements
-    from Qwen's noisy output (reasoning, markdown, XML tags).
+    GenAI-powered SQL agent. Extracts clean SELECT statements
+    from Qwen's noisy output (think blocks, markdown, reasoning).
     """
 
     SYSTEM_PROMPT_TEMPLATE = """You are a SQL generator. Output ONE raw SQL query only.
@@ -67,68 +67,51 @@ OUTPUT:"""
 
     def _clean_sql_output(self, raw_output: str) -> str:
         """
-        Brutally isolates the first SELECT...; statement.
-        Discards everything else: reasoning, markdown, XML, filler.
+        Extracts exactly one SELECT...; statement.
+        Discards everything else: think blocks, markdown, reasoning, filler.
         """
         if not raw_output:
             return ""
 
         text = raw_output
 
-        # Strip markdown & special tokens
+        # 1. Remove ENTIRE <think>...</think> blocks (including unclosed ones)
+        text = re.sub(r'<think>.*?(?:</think>|$)', '', text, flags=re.DOTALL | re.IGNORECASE)
+
+        # 2. Remove markdown code fences
         text = re.sub(r"```sql\s*", "", text, flags=re.IGNORECASE)
         text = re.sub(r"```\s*", "", text)
+
+        # 3. Remove backticks and stray XML tags
         text = text.replace("`", "")
         text = re.sub(r"<[^>]+>", "", text)
 
-        # Find first SELECT
+        # 4. Find SQL: from first SELECT to first semicolon
         select_match = re.search(r'\bSELECT\b', text, re.IGNORECASE)
         if not select_match:
+            logger.error(f"No SELECT found. Raw: {text[:200]}")
             return ""
 
-        remaining = text[select_match.start():]
+        sql_fragment = text[select_match.start():]
+        semi_pos = sql_fragment.find(';')
 
-        # Extract line-by-line until SQL clearly ends
-        lines = remaining.splitlines()
-        sql_lines = []
+        if semi_pos != -1:
+            sql = sql_fragment[:semi_pos + 1]
+        else:
+            # No semicolon: cut at first explanation word, then add ;
+            sql = sql_fragment
+            cut = re.search(
+                r'\s+(?:Here|Note|Explanation|This|That|The|Now|Let|I\s|You\s|Query|Output|SQL|Refining|Aliases|Columns|Constraints|Final|Self|If|Because|Since|However|Therefore|Thus|So|Wait|Actually|First|Second|Third|Next|Then|Finally|Sure|Okay|I need|I will|I can)\b',
+                sql, re.IGNORECASE
+            )
+            if cut:
+                sql = sql[:cut.start()]
+            sql = sql.strip() + ';'
 
-        for line in lines:
-            stripped = line.strip()
-            if not stripped:
-                break
-
-            # Stop at explanation / reasoning lines
-            if re.match(
-                r'^(?:\d+\.|Note|Explanation|Here|Sure|Okay|This|That|It|The|Query|SQL|Output|Refining|Aliases|Columns|Constraints|Final|Self|If|Because|Since|However|Therefore|Thus|So|Wait|Actually|Let me|First|Second|Third|Next|Then|Finally)\b',
-                stripped,
-                re.IGNORECASE
-            ):
-                break
-
-            sql_lines.append(stripped)
-
-            # Semicolon = end of SQL
-            if stripped.endswith(';'):
-                break
-
-        if not sql_lines:
-            return ""
-
-        sql = " ".join(sql_lines)
+        # Collapse whitespace
         sql = re.sub(r'\s+', ' ', sql).strip()
 
-        # Second-pass: cut inline explanation text that leaked in
-        inline_cut = re.search(
-            r'\s+(?:Note|Explanation|Here|Sure|Okay|Refining|Aliases|Columns|Constraints|Final|Self|If|Because|Since|However|Therefore|Thus|So|Wait|Actually)\b',
-            sql,
-            re.IGNORECASE
-        )
-        if inline_cut:
-            sql = sql[:inline_cut.start()].strip()
-
-        if not sql.endswith(';'):
-            sql += ';'
-
+        logger.info(f"Extracted SQL: {sql[:120]}...")
         return sql
 
     def generate_sql(self, question: str, schema_ddl: str, dialect: str = "SQLite") -> str:
@@ -152,7 +135,7 @@ OUTPUT:"""
             cleaned_sql = self._clean_sql_output(raw_output)
 
             if not cleaned_sql:
-                logger.error(f"SQL extraction failed. Raw: {raw_output[:300]}")
+                logger.error(f"Extraction failed. Raw: {raw_output[:300]}")
                 raise ValueError("Could not extract SQL from model output.")
 
             return cleaned_sql

@@ -1,15 +1,7 @@
--- ============================================================
--- E-Commerce BI Database Schema
--- ============================================================
-
--- Drop tables if they exist (for clean initialization)
 DROP TABLE IF EXISTS orders;
 DROP TABLE IF EXISTS products;
 DROP TABLE IF EXISTS users;
 
--- ============================================================
--- Users Table
--- ============================================================
 CREATE TABLE users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -17,9 +9,6 @@ CREATE TABLE users (
     signup_date DATE NOT NULL
 );
 
--- ============================================================
--- Products Table
--- ============================================================
 CREATE TABLE products (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -28,9 +17,6 @@ CREATE TABLE products (
     stock INTEGER NOT NULL DEFAULT 0
 );
 
--- ============================================================
--- Orders Table
--- ============================================================
 CREATE TABLE orders (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
@@ -42,9 +28,6 @@ CREATE TABLE orders (
     FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
 );
 
--- ============================================================
--- Mock Data: Users
--- ============================================================
 INSERT INTO users (name, email, signup_date) VALUES
 ('Alice Johnson', 'alice.johnson@email.com', '2023-01-15'),
 ('Bob Smith', 'bob.smith@email.com', '2023-02-20'),
@@ -57,9 +40,6 @@ INSERT INTO users (name, email, signup_date) VALUES
 ('Ian Clark', 'ian.clark@email.com', '2023-09-14'),
 ('Julia Roberts', 'julia.roberts@email.com', '2023-10-01');
 
--- ============================================================
--- Mock Data: Products
--- ============================================================
 INSERT INTO products (name, category, price, stock) VALUES
 ('Wireless Bluetooth Headphones', 'Electronics', 79.99, 150),
 ('Organic Green Tea - 50 Bags', 'Groceries', 12.50, 300),
@@ -72,9 +52,6 @@ INSERT INTO products (name, category, price, stock) VALUES
 ('Mechanical Keyboard RGB', 'Electronics', 129.99, 45),
 ('Protein Powder - Vanilla 2lb', 'Sports & Outdoors', 49.99, 90);
 
--- ============================================================
--- Mock Data: Orders
--- ============================================================
 INSERT INTO orders (user_id, product_id, order_date, quantity, total_amount) VALUES
 (1, 1, '2023-06-10', 1, 79.99),
 (1, 3, '2023-06-15', 2, 49.98),

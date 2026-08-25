@@ -1,6 +1,7 @@
 """
 app.py
 Streamlit-based GenAI-Powered Text-to-SQL Business Intelligence Dashboard.
+Theme-aware, sidebar-fixed, callback-optimized.
 """
 
 import os
@@ -53,7 +54,7 @@ def init_session_state() -> None:
         "db_manager": None, "sql_agent": None,
         "last_query": None, "last_results": None,
         "schema_loaded": False, "query_history": [],
-        "user_query_input": ""  # <-- key for the text input
+        "user_query_input": ""
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -113,6 +114,7 @@ def render_schema_sidebar(db_manager: DatabaseManager) -> None:
                 for col in columns:
                     pk_badge = " 🔑" if col.get("pk") else ""
                     nullable = "NULL" if col.get("nullable") else "NOT NULL"
+                    # FIXED: use st.markdown (not st.sidebar) inside sidebar expander
                     st.markdown(f"• `{col['name']}` `{col['type']}` *{nullable}*{pk_badge}")
         st.sidebar.markdown("---")
         st.sidebar.info("💡 Ask about users, products, orders, and relationships.")
@@ -126,6 +128,7 @@ def render_query_history() -> None:
         for idx, item in enumerate(reversed(st.session_state.query_history[-5:])):
             q_num = len(st.session_state.query_history) - idx
             with st.sidebar.expander(f"Q{q_num}", expanded=False):
+                # FIXED: use st.markdown (not st.sidebar) inside sidebar expander
                 st.markdown(f"**Q:** {item['question']}")
                 st.markdown(f"```sql\n{item['sql']}\n```")
                 st.markdown(f"**Rows:** {item['rows']}")
@@ -173,9 +176,6 @@ def auto_visualize(df: pd.DataFrame, query: str) -> Optional[go.Figure]:
     return fig
 
 
-# ============================================================
-# CALLBACK: Fills the text input when a suggestion is clicked
-# ============================================================
 def fill_query(query: str) -> None:
     st.session_state.user_query_input = query
 
@@ -208,9 +208,6 @@ def main() -> None:
         unsafe_allow_html=True
     )
 
-    # ============================================================
-    # Suggestion Chips — on_click writes directly to session state
-    # ============================================================
     st.markdown("**Try asking:**")
     c1, c2, c3, c4 = st.columns(4)
     suggestions = [
@@ -235,9 +232,6 @@ def main() -> None:
 
     st.markdown("---")
 
-    # ============================================================
-    # Text Input — bound to session state key
-    # ============================================================
     user_question = st.text_input(
         "Ask your database a question in plain English",
         placeholder="e.g., What are the top 3 best-selling products by revenue?",
@@ -251,7 +245,7 @@ def main() -> None:
         if st.button("🔄 Clear Results", use_container_width=False):
             st.session_state.last_query = None
             st.session_state.last_results = None
-            st.session_state.user_query_input = ""  # Also clear input
+            st.session_state.user_query_input = ""
             st.rerun()
 
     if submit_clicked and user_question.strip():
